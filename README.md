@@ -15,7 +15,11 @@ firmware and the libhmk port.
 **Unofficial.** Not made or supported by Madlions or its manufacturer. It
 reuses the vendor bootloader's USB ID 373B:2028 and its flash protocol only so
 that existing tools (fwtool.py, the vendor's updater) keep working; the USB
-strings say "Unmad (unofficial)" / "Unmad bootloader".
+strings say "Unmad (unofficial)" / "Unmad bootloader v5".
+
+Release files: `unmad-bootloader-mad60he-v1.2.1.bin` is v5 (this source),
+`unmad-bootloader-mad60he-v1.0.bin` (releases v1.0 to v1.2) is v3, without
+the Esc rescue.
 
 ## What it does
 
@@ -52,23 +56,33 @@ MAD60 HE checks in unmad-firmware (`keyboards/mad60he/tests`):
 The protocol and the vendor bootloader's behaviour are described in that
 fork's `keyboards/mad60he/NOTES.md`.
 
-## Install
+## Install and switching back
 
-With the Unmad firmware (v1.0 or later) running, which has the install
-commands, and the release files `hmk_bootloader.py` and
-`unmad-bootloader-mad60he-v1.0.bin` (from the
-[unmad-firmware releases](https://github.com/thienanbeou/unmad-firmware/releases);
-needs Python 3 and `pip install hidapi`):
+Needs the Unmad firmware (v1.0 or later) running, which has the install
+commands, the release files `hmk_bootloader.py` and
+`unmad-bootloader-mad60he-v1.2.1.bin` from the
+[unmad-firmware releases](https://github.com/thienanbeou/unmad-firmware/releases),
+Python 3 and `pip install hidapi`. Close the configurator tab first. Each
+install saves what is in the bootloader sector now as
+`sector0-before-install-<time>.bin` in the current folder, writes the new
+one and reads it back.
 
-    python hmk_bootloader.py install unmad-bootloader-mad60he-v1.0.bin --yes
+| You want | Do this |
+|---|---|
+| stock bootloader -> Unmad bootloader | with the Unmad firmware running: `python hmk_bootloader.py install unmad-bootloader-mad60he-v1.2.1.bin --yes`. Keep the `sector0-before-install-<time>.bin` it saves: it is your stock bootloader |
+| Unmad bootloader -> stock bootloader | with the Unmad firmware running: `python hmk_bootloader.py install sector0-before-install-<time>.bin --yes` (the file from your first install) |
+| a newer Unmad bootloader | install the new file the same way. It saves your old Unmad bootloader too: keep the file from the **first** install, the only copy of the stock one |
+| everything back to stock | first the stock bootloader (row 2), then the stock firmware (`fwtool.py`, see the firmware guide). Only the Unmad firmware can change the bootloader, so this order |
+| which one do I have? | `python hmk_bootloader.py verify FILE` compares without writing |
 
-It first saves your current bootloader (the vendor one) as
-`sector0-before-install-<time>.bin` in the current folder, then writes the
-new one and reads it back. Keep that file: installing it the same way is how
-you go back to the vendor bootloader.
+Lost the stock bootloader file? Nothing breaks: the Unmad bootloader runs the
+stock firmware too (switching firmware both ways still works); you just
+cannot put the stock bootloader back. Madlions' bootloader is not ours to
+publish.
 
-**Risk:** losing power during the install (about a second) leaves the board
-without boot code; recovering then needs SWD. Do not unplug while it runs.
+Every install writes the bootloader sector. **Do not unplug while it runs:**
+losing power in that second leaves the board without boot code, recoverable
+only with an SWD programmer.
 
 ## License
 
