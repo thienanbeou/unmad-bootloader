@@ -31,6 +31,12 @@ strings say "Unmad (unofficial)" / "Unmad bootloader".
   `AA 96` (the end of every flash) starts even with Esc held.
 - A command packet with a wrong checksum is answered as failed (v3 could
   answer it as written).
+- Bus powered, no remote wakeup in its USB descriptor (v5; the vendor's
+  claimed both).
+- Known issue: on Windows, after a few idle seconds with no program holding
+  it open, the first open fails and the bootloader re-enumerates (Windows
+  suspends it and it does not resume cleanly). `fwtool.py` retries the open;
+  an older `fwtool.py` works when run again.
 
 ## Build
 

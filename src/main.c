@@ -401,7 +401,7 @@ __attribute__((noinline, used)) void boot_packet(const uint8_t *in, uint8_t *out
 
 //--------------------------------------------------------------------+
 // USB descriptors (copied from the vendor bootloader's RAM image, except the
-// manufacturer and product strings)
+// manufacturer and product strings and, from v5, the configuration attributes)
 //--------------------------------------------------------------------+
 
 static const uint8_t desc_device[] = {
@@ -416,7 +416,11 @@ static const uint8_t desc_report[] = {
 };
 
 static const uint8_t desc_config[] = {
-    0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0xE0, 0x32,       // config
+    // Bus powered, no remote wakeup (v5; the vendor's 0xE0 claimed both). Known
+    // issue, not this: Windows suspends the bootloader after a few idle seconds
+    // with no handle open, and its resume fails (the next open fails and it
+    // re-enumerates); fwtool.py retries the open
+    0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32,       // config
     0x09, 0x04, 0x00, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00,       // interface
     0x09, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, sizeof(desc_report), 0x00, // HID
     0x07, 0x05, 0x81, 0x03, 0x40, 0x00, 0x01,                   // EP1 IN
@@ -424,7 +428,7 @@ static const uint8_t desc_config[] = {
 };
 
 static const char *const strings[] = {
-    NULL, "Unmad (unofficial)", "Unmad bootloader v4", "000000000001",
+    NULL, "Unmad (unofficial)", "Unmad bootloader v5", "000000000001",
 };
 
 uint8_t const *tud_descriptor_device_cb(void) { return desc_device; }
