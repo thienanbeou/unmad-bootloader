@@ -25,7 +25,12 @@ strings say "Unmad (unofficial)" / "Unmad bootloader".
   `AA 01` / `AA 02` / `AA 03` / `AA 96`, same as the vendor bootloader.
 - Writes only the firmware area (sectors 5-7), reads back every word, writes
   the firmware's vector table last so a half-written firmware never starts.
-- A replug always starts the firmware again.
+- A replug starts the firmware again. Hold **Esc** while plugging in to stay
+  in the bootloader instead (v4): read by the bootloader itself, so it works
+  with any firmware, even one that never starts. A firmware started with
+  `AA 96` (the end of every flash) starts even with Esc held.
+- A command packet with a wrong checksum is answered as failed (v3 could
+  answer it as written).
 
 ## Build
 

@@ -24,6 +24,9 @@
  * not a power cycle. Not BOOT_MAGIC: set it and start the app (the app clears
  * it; libhmk does in board_init). BOOT_MAGIC (the app asked for the bootloader,
  * or crashed before clearing it): clear it and stay in USB mode until AA 96.
+ * Ours also stays when Esc is held while the app would start (v4), so any app,
+ * however broken, can be replaced; except right after AA 96, which always
+ * starts the app.
  *
  * Packets: 64 bytes, byte 63 = OR of bytes 0..62. The reply echoes the packet
  * with byte 63 = that OR, inverted when the command failed.
@@ -57,6 +60,9 @@
 
 #define BOOT_FLAG (*(volatile uint32_t *)0x2001FFFCu)
 #define BOOT_MAGIC 0x96969696u
+// Left by AA 96: start the app even with Esc held (not BOOT_MAGIC, so the
+// vendor rule and the apps read it as "start the app")
+#define BOOT_START_APP 0x41505021u
 
 //--------------------------------------------------------------------+
 // Boot
@@ -77,6 +83,98 @@ __attribute__((noreturn)) static void app_start(void) {
   __ISB();
   __asm volatile("msr msp, %0\n\tbx %1" : : "r"(vt[0]), "r"(vt[1]));
   __builtin_unreachable();
+}
+
+//--------------------------------------------------------------------+
+// Esc check
+//--------------------------------------------------------------------+
+
+// Raw 12-bit levels fall when a key is pressed: about 1860-2060 at rest,
+// 1110-1160 bottomed out (all 61 keys, 2026-10-17). Below 500 is no reading
+// (the stock firmware's rule). 1495 = libhmk's Bootmagic level 2600 inverted.
+#define ESC_PRESSED_MIN 500u
+#define ESC_PRESSED_MAX 1495u
+// Readings about 1 ms apart that must all be pressed
+#define ESC_SAMPLES 20u
+
+// Columns, active low (MAD60HE_NOTES 4b): col 0 = PA8 is Esc's
+#define COLS_A 0x9F00u // PA8-PA12, PA15
+#define COLS_B 0x0078u // PB3-PB6
+#define COLS_C 0x1C00u // PC10-PC12
+#define COLS_D 0x0004u // PD2
+
+static void delay(uint32_t n) {
+  for (volatile uint32_t i = 0; i < n; i++)
+    ;
+}
+
+/** @brief MODER value with every pin in `pins` set to `mode` */
+static uint32_t moder(uint32_t moder, uint32_t pins, uint32_t mode) {
+  for (uint32_t i = 0; i < 16; i++)
+    if (pins & (1u << i))
+      moder = (moder & ~(3u << (2 * i))) | (mode << (2 * i));
+  return moder;
+}
+
+/** @brief One reading of row 0 (PA3, ADC1 channel 3) */
+static uint32_t esc_read(void) {
+  ADC1->SR = 0;
+  ADC1->CR2 |= ADC_CR2_SWSTART;
+  while (!(ADC1->SR & ADC_SR_EOC))
+    ;
+  return ADC1->DR;
+}
+
+/**
+ * @brief Whether Esc is held, read the way libhmk scans it
+ *
+ * Runs on the reset clock (HSI 16 MHz) and puts every peripheral it used back
+ * to its reset state, so the app still starts from a clean chip. A level
+ * outside the pressed band at any reading means not held: a misread starts the
+ * app, the normal case costs one reading.
+ */
+static bool esc_held(void) {
+  const uint32_t ahb1enr = RCC->AHB1ENR, apb2enr = RCC->APB2ENR;
+  RCC->AHB1ENR = ahb1enr | RCC_AHB1ENR_GPIOAEN | RCC_AHB1ENR_GPIOBEN |
+                 RCC_AHB1ENR_GPIOCEN | RCC_AHB1ENR_GPIODEN;
+  RCC->APB2ENR = apb2enr | RCC_APB2ENR_ADC1EN;
+  (void)RCC->APB2ENR;
+
+  // Every column inactive (high) before it becomes an output, then column 0
+  GPIOA->BSRR = COLS_A;
+  GPIOB->BSRR = COLS_B;
+  GPIOC->BSRR = COLS_C;
+  GPIOD->BSRR = COLS_D;
+  GPIOA->MODER = moder(moder(GPIOA->MODER, COLS_A, 1), 1u << 3, 3);
+  GPIOB->MODER = moder(GPIOB->MODER, COLS_B, 1);
+  GPIOC->MODER = moder(GPIOC->MODER, COLS_C, 1);
+  GPIOD->MODER = moder(GPIOD->MODER, COLS_D, 1);
+  GPIOA->BSRR = GPIO_BSRR_BR8;
+
+  // ADC clock 8 MHz (PCLK2 / 2), 56-cycle sampling, one conversion of ch 3
+  ADC1->SMPR2 = 3u << ADC_SMPR2_SMP3_Pos;
+  ADC1->SQR1 = 0;
+  ADC1->SQR3 = 3;
+  ADC1->CR2 = ADC_CR2_ADON;
+  delay(100); // ADC wake-up and column settle (libhmk: 10 us)
+
+  bool held = true;
+  for (uint32_t i = 0; held && i < ESC_SAMPLES; i++) {
+    const uint32_t v = esc_read();
+    held = v >= ESC_PRESSED_MIN && v <= ESC_PRESSED_MAX;
+    if (held && i + 1 < ESC_SAMPLES)
+      delay(2000);
+  }
+
+  ADC1->CR2 = 0;
+  RCC->APB2RSTR = RCC_APB2RSTR_ADCRST;
+  RCC->APB2RSTR = 0;
+  RCC->AHB1RSTR = RCC_AHB1RSTR_GPIOARST | RCC_AHB1RSTR_GPIOBRST |
+                  RCC_AHB1RSTR_GPIOCRST | RCC_AHB1RSTR_GPIODRST;
+  RCC->AHB1RSTR = 0;
+  RCC->APB2ENR = apb2enr;
+  RCC->AHB1ENR = ahb1enr;
+  return held;
 }
 
 //--------------------------------------------------------------------+
@@ -291,8 +389,10 @@ __attribute__((noinline, used)) void boot_packet(const uint8_t *in, uint8_t *out
   uint8_t sum = 0;
   for (uint32_t i = 0; i < 63; i++)
     sum |= in[i];
-  bool ok = true;
-  if (in[0] == 0xAA && in[63] == sum)
+  // Not a command: echo it, as the vendor code does. A command whose checksum
+  // does not match fails, so the host never takes it as written.
+  bool ok = in[0] != 0xAA;
+  if (!ok && in[63] == sum)
     ok = command(in);
   memcpy(out, in, 63);
   sum |= in[63];
@@ -324,7 +424,7 @@ static const uint8_t desc_config[] = {
 };
 
 static const char *const strings[] = {
-    NULL, "Unmad (unofficial)", "Unmad bootloader", "000000000001",
+    NULL, "Unmad (unofficial)", "Unmad bootloader v4", "000000000001",
 };
 
 uint8_t const *tud_descriptor_device_cb(void) { return desc_device; }
@@ -371,8 +471,9 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 
 int main(void) {
   if (BOOT_FLAG != BOOT_MAGIC) {
+    const bool requested = BOOT_FLAG == BOOT_START_APP;
     BOOT_FLAG = BOOT_MAGIC;
-    if (app_valid())
+    if (app_valid() && (requested || !esc_held()))
       app_start();
   } else {
     BOOT_FLAG = 0;
@@ -385,12 +486,11 @@ int main(void) {
 
   while (1) {
     tud_task();
-    // AA 96: reset once the host has read the reply. The flag is not
-    // BOOT_MAGIC, so the next boot starts the app.
+    // AA 96: reset once the host has read the reply. The next boot starts the
+    // app, even with Esc held.
     if (reset_pending && tud_hid_ready()) {
-      for (volatile uint32_t i = 0; i < 1000000; i++)
-        ;
-      BOOT_FLAG = 0;
+      delay(1000000);
+      BOOT_FLAG = BOOT_START_APP;
       NVIC_SystemReset();
     }
   }
